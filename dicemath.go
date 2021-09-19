@@ -184,12 +184,12 @@ func (t *Term) Eval(ctx Context) float64 {
 	return n
 }
 
-func (e *Expression) Eval(ctx Context) float64 {
+func (e *Expression) Eval(ctx Context) int {
 	l := e.Left.Eval(ctx)
 	for _, r := range e.Right {
 		l = r.Operator.Eval(l, r.Term.Eval(ctx))
 	}
-	return l
+	return int(l)
 }
 
 type Context map[string]float64
