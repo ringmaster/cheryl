@@ -129,20 +129,20 @@ func (e *Expression) String() string {
 
 // Evaluation
 
-func die_roll(count int, sides int) int {
+func die_roll(ctx Parser, count int, sides int) int {
 	result := 0
 
-	fmt.Printf("Rolling %dd%d:\n", count, sides)
+	//fmt.Printf("Rolling %dd%d:\n", count, sides)
 	for i := 0; i < count; i++ {
-		die_result := rand.Intn(sides) + 1
-		fmt.Printf("  Rolling d%d: %d\n", sides, die_result)
+		die_result := ctx.randomizer(1, sides)
+		//fmt.Printf("  Rolling d%d: %d\n", sides, die_result)
 		result += die_result
 	}
 
 	return result
 }
 
-func (o Operator) Eval(l, r int) int {
+func (o Operator) Eval(ctx Parser, l, r int) int {
 	switch o {
 	case OpMul:
 		return l * r
@@ -153,17 +153,17 @@ func (o Operator) Eval(l, r int) int {
 	case OpSub:
 		return l - r
 	case OpDice:
-		return die_roll(int(l), int(r))
+		return die_roll(ctx, int(l), int(r))
 	}
 	panic("unsupported operator")
 }
 
-func (v *Value) Eval(ctx Context) int {
+func (v *Value) Eval(ctx Parser) int {
 	switch {
 	case v.Number != nil:
 		return *v.Number
 	case v.Variable != nil:
-		value, ok := ctx[*v.Variable]
+		value, ok := ctx.variables[*v.Variable]
 		if !ok {
 			panic("no such variable " + *v.Variable)
 		}
@@ -173,7 +173,7 @@ func (v *Value) Eval(ctx Context) int {
 	}
 }
 
-func (f *Factor) Eval(ctx Context) int {
+func (f *Factor) Eval(ctx Parser) int {
 	b := f.Base.Eval(ctx)
 	if f.Exponent != nil {
 		return int(math.Pow(float64(b), float64(f.Exponent.Eval(ctx))))
@@ -181,36 +181,47 @@ func (f *Factor) Eval(ctx Context) int {
 	return b
 }
 
-func (t *Term) Eval(ctx Context) int {
+func (t *Term) Eval(ctx Parser) int {
 	n := 0
 	if t.Left != nil {
 		n = t.Left.Eval(ctx)
 		if t.Right != nil {
 			for _, r := range t.Right {
-				n = r.Operator.Eval(n, r.Factor.Eval(ctx))
+				n = r.Operator.Eval(ctx, n, r.Factor.Eval(ctx))
 			}
 		}
 	}
 	return n
 }
 
-func (e *Expression) Eval(ctx Context) int {
+func (e *Expression) Eval(ctx Parser) int {
 	l := 0
 	if e.Left != nil {
 		l = e.Left.Eval(ctx)
 		if e.Right != nil {
 			for _, r := range e.Right {
-				l = r.Operator.Eval(l, r.Term.Eval(ctx))
+				l = r.Operator.Eval(ctx, l, r.Term.Eval(ctx))
 			}
 		}
 	}
 	return l
 }
 
-type Context map[string]int
+type Parser struct {
+	variables  map[string]int
+	randomizer func(min int, max int) int
+	lexer      *lexer.StatefulDefinition
+}
 
-func Parse(calc string) string {
-	rollLexer := lexer.MustSimple([]lexer.Rule{
+func Parse(calc string, opts ...func(*Parser)) string {
+
+	p := &Parser{}
+
+	p.randomizer = func(min int, max int) int {
+		return rand.Intn(max-min) + min
+	}
+
+	p.lexer = lexer.MustSimple([]lexer.Rule{
 		{"Comment", `(?:;)[^,]*`, nil},
 		{"Ident", `[a-zA-Z]+`, nil},
 		{"Number", `(?:\d*)?\d+`, nil},
@@ -218,18 +229,38 @@ func Parse(calc string) string {
 		{"Whitespace", `[ \t\n\r]+`, nil},
 	})
 
+	p.variables = make(map[string]int)
+
+	p.randomizer = func(min int, max int) int { return rand.Intn(max-min) + min }
+
+	// call option functions on instance to set options on it
+	for _, opt := range opts {
+		opt(p)
+	}
+
 	var parser = participle.MustBuild(
 		&Expression{},
-		participle.Lexer(rollLexer),
+		participle.Lexer(p.lexer),
 		participle.Elide("Comment", "Whitespace"),
 	)
 
-	fmt.Println(parser)
+	/*
+		// This outputs the parser as a human-readable rule set
+		fmt.Println(parser)
+	*/
+
+	/*
+		// This chunk of code outputs the generated lexer as Go code, which is 10x faster
+		f, err := os.OpenFile("./rolllexer.go", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		lexer.ExperimentalGenerateLexer(f, "main", rollLexer)
+	*/
 
 	expr := &Expression{}
 	parser.ParseString("", calc, expr)
 
-	ctx := make(Context)
-
-	return fmt.Sprintf("%s = %d", expr, expr.Eval(ctx))
+	return fmt.Sprintf("%s = %d", expr, expr.Eval(*p))
 }

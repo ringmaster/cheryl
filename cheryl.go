@@ -21,10 +21,10 @@ const KuteGoAPIURL = "https://kutego-api-xxxxx-ew.a.run.app"
 
 func init() {
 	flag.StringVar(&Token, "t", "", "Bot Token")
-	flag.Parse()
 }
 
 func main() {
+	flag.Parse()
 
 	// Create a new Discord session using the provided bot token.
 	dg, err := discordgo.New("Bot " + Token)
