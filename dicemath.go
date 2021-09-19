@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/participle/v2"
+	"github.com/alecthomas/participle/v2/lexer"
 )
 
 type Operator int
@@ -32,7 +33,7 @@ func (o *Operator) Capture(s []string) error {
 // B --> v | "(" E ")" | "-" T
 
 type Value struct {
-	Number        *float64    `  @(Float|Int)`
+	Number        *int        `  @Number`
 	Variable      *string     `| @Ident`
 	Subexpression *Expression `| "(" @@ ")"`
 }
@@ -58,8 +59,9 @@ type OpTerm struct {
 }
 
 type Expression struct {
-	Left  *Term     `@@`
-	Right []*OpTerm `@@*`
+	Left    *Term     `@@`
+	Right   []*OpTerm `@@*`
+	Comment *string   `(@Comment)?`
 }
 
 // Display
@@ -82,7 +84,7 @@ func (o Operator) String() string {
 
 func (v *Value) String() string {
 	if v.Number != nil {
-		return fmt.Sprintf("%g", *v.Number)
+		return fmt.Sprintf("%d", *v.Number)
 	}
 	if v.Variable != nil {
 		return *v.Variable
@@ -119,6 +121,9 @@ func (e *Expression) String() string {
 	for _, r := range e.Right {
 		out = append(out, r.String())
 	}
+	if e.Comment != nil {
+		out = append(out, *e.Comment)
+	}
 	return strings.Join(out, " ")
 }
 
@@ -137,7 +142,7 @@ func die_roll(count int, sides int) int {
 	return result
 }
 
-func (o Operator) Eval(l, r float64) float64 {
+func (o Operator) Eval(l, r int) int {
 	switch o {
 	case OpMul:
 		return l * r
@@ -148,12 +153,12 @@ func (o Operator) Eval(l, r float64) float64 {
 	case OpSub:
 		return l - r
 	case OpDice:
-		return float64(die_roll(int(l), int(r)))
+		return die_roll(int(l), int(r))
 	}
 	panic("unsupported operator")
 }
 
-func (v *Value) Eval(ctx Context) float64 {
+func (v *Value) Eval(ctx Context) int {
 	switch {
 	case v.Number != nil:
 		return *v.Number
@@ -168,34 +173,56 @@ func (v *Value) Eval(ctx Context) float64 {
 	}
 }
 
-func (f *Factor) Eval(ctx Context) float64 {
+func (f *Factor) Eval(ctx Context) int {
 	b := f.Base.Eval(ctx)
 	if f.Exponent != nil {
-		return math.Pow(b, f.Exponent.Eval(ctx))
+		return int(math.Pow(float64(b), float64(f.Exponent.Eval(ctx))))
 	}
 	return b
 }
 
-func (t *Term) Eval(ctx Context) float64 {
-	n := t.Left.Eval(ctx)
-	for _, r := range t.Right {
-		n = r.Operator.Eval(n, r.Factor.Eval(ctx))
+func (t *Term) Eval(ctx Context) int {
+	n := 0
+	if t.Left != nil {
+		n = t.Left.Eval(ctx)
+		if t.Right != nil {
+			for _, r := range t.Right {
+				n = r.Operator.Eval(n, r.Factor.Eval(ctx))
+			}
+		}
 	}
 	return n
 }
 
 func (e *Expression) Eval(ctx Context) int {
-	l := e.Left.Eval(ctx)
-	for _, r := range e.Right {
-		l = r.Operator.Eval(l, r.Term.Eval(ctx))
+	l := 0
+	if e.Left != nil {
+		l = e.Left.Eval(ctx)
+		if e.Right != nil {
+			for _, r := range e.Right {
+				l = r.Operator.Eval(l, r.Term.Eval(ctx))
+			}
+		}
 	}
-	return int(l)
+	return l
 }
 
-type Context map[string]float64
+type Context map[string]int
 
 func Parse(calc string) string {
-	var parser = participle.MustBuild(&Expression{})
+	rollLexer := lexer.MustSimple([]lexer.Rule{
+		{"Comment", `(?:;)[^,]*`, nil},
+		{"Ident", `[a-zA-Z]+`, nil},
+		{"Number", `(?:\d*)?\d+`, nil},
+		{"Punct", `[-[!@#$%^&*()+_={}\|:;"'<,>.?/]|]`, nil},
+		{"Whitespace", `[ \t\n\r]+`, nil},
+	})
+
+	var parser = participle.MustBuild(
+		&Expression{},
+		participle.Lexer(rollLexer),
+		participle.Elide("Comment", "Whitespace"),
+	)
 
 	fmt.Println(parser)
 
@@ -204,5 +231,5 @@ func Parse(calc string) string {
 
 	ctx := make(Context)
 
-	return fmt.Sprintf("%s = %f", expr, expr.Eval(ctx))
+	return fmt.Sprintf("%s = %d", expr, expr.Eval(ctx))
 }
